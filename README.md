@@ -120,7 +120,71 @@ var file = new File(["Hello, world!"], "hello world.txt", {type: "text/plain;cha
 FileSaver.saveAs(file);
 ```
 
+How It Works
+------------
 
+FileSaver.js selects the best available download mechanism at runtime based on browser capabilities. There are three mechanisms, applied in priority order:
+
+### 1. `a[download]` — Anchor-element-to-UI (Primary mechanism)
+
+The preferred approach on modern browsers. FileSaver.js creates a hidden `<a>` element, sets its `href` to an object URL (for Blobs) or the raw URL (for strings), and sets the `download` attribute to the desired filename. It then programmatically dispatches a `click` event to trigger the browser's native save/download UI.
+
+```
+[saveAs(blob, name)]
+        |
+        v
+  Create <a download="name">
+        |
+        v
+  a.href = URL.createObjectURL(blob)
+        |
+        v
+  Dispatch click event → Browser download UI
+        |
+        v
+  Revoke object URL after 40 seconds
+```
+
+Key details:
+- Object URLs are revoked after 40 seconds to free memory.
+- For cross-origin string URLs, a CORS check (`HEAD` request) is performed first. If the resource allows CORS access the file is fetched as a Blob and saved; otherwise the anchor is opened in a new tab.
+- macOS WebView is excluded from this path because it misidentifies itself as a browser but does not support `a[download]`.
+
+### 2. `msSaveOrOpenBlob` — Internet Explorer fallback
+
+Used when `navigator.msSaveOrOpenBlob` is available (IE 10+). FileSaver.js delegates directly to the browser's built-in save API.
+
+```
+[saveAs(blob, name)]
+        |
+        v
+  navigator.msSaveOrOpenBlob(blob, name) → IE Save dialog
+```
+
+For string URLs under IE, the same CORS check is applied: fetch as Blob if CORS is allowed, otherwise open in a new tab.
+
+### 3. FileReader + popup — Legacy / iOS fallback
+
+Used when neither `a[download]` nor `msSaveOrOpenBlob` is available (older Safari, Chrome on iOS, macOS WebView with `application/octet-stream` blobs).
+
+A blank popup window is opened immediately (synchronously, within the user-interaction event) to avoid popup blockers. The Blob is then read asynchronously with a `FileReader`, and the resulting `data:` URI is navigated to inside that popup, causing the browser to offer the file for saving or display it.
+
+```
+[saveAs(blob, name)]
+        |
+        v
+  open('', '_blank') → blank popup
+        |
+        v
+  FileReader.readAsDataURL(blob)
+        |
+        v
+  popup.location.href = data: URI → Browser handles download/display
+```
+
+### Byte Order Mark (BOM) handling
+
+Before passing a Blob to any of the above mechanisms, FileSaver.js can optionally prepend a UTF-8 BOM (`0xEF 0xBB 0xBF`) when `{ autoBom: true }` is passed and the MIME type indicates a UTF-8 text or XML document. This ensures correct encoding detection by applications such as Microsoft Excel.
 
 ![Tracking image](https://in.getclicky.com/212712ns.gif)
 
