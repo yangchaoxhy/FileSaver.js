@@ -16,6 +16,9 @@ var _global = typeof window === 'object' && window.window === window
   ? global
   : this
 
+// Optionally prepend a UTF-8 BOM to a Blob when autoBom is requested and the
+// MIME type indicates a UTF-8 text or XML document.  This is required by some
+// applications (e.g. Excel) to detect the encoding automatically.
 function bom (blob, opts) {
   if (typeof opts === 'undefined') opts = { autoBom: false }
   else if (typeof opts !== 'object') {
@@ -31,6 +34,10 @@ function bom (blob, opts) {
   return blob
 }
 
+// Fetch a URL as a Blob and pass it to saveAs.  Used when the browser
+// supports a[download] or msSaveOrOpenBlob but the URL is cross-origin and
+// CORS is enabled, so we can download the bytes directly instead of just
+// opening the URL in a new tab.
 function download (url, name, opts) {
   var xhr = new XMLHttpRequest()
   xhr.open('GET', url)
@@ -44,6 +51,9 @@ function download (url, name, opts) {
   xhr.send()
 }
 
+// Check whether a URL allows CORS access by issuing a synchronous HEAD
+// request.  Using a sync request here avoids popup blockers that would
+// otherwise activate if we opened a tab/window inside an async callback.
 function corsEnabled (url) {
   var xhr = new XMLHttpRequest()
   // use sync to avoid popup blocker
@@ -76,6 +86,21 @@ var saveAs = _global.saveAs || (
   (typeof window !== 'object' || window !== _global)
     ? function saveAs () { /* noop */ }
 
+  // ---------------------------------------------------------------------------
+  // Mechanism 1 — a[download] (Anchor-element-to-UI)
+  //
+  // This is the primary, preferred mechanism on all modern browsers.  A hidden
+  // <a> element is created, its `download` attribute is set to the desired
+  // filename, and a programmatic click is dispatched to let the browser handle
+  // the download through its own native UI.
+  //
+  // For Blob/File arguments an object URL is created and revoked after 40 s.
+  // For string URL arguments a CORS check determines whether the file can be
+  // fetched directly (→ downloaded as Blob) or must be opened in a new tab.
+  //
+  // macOS WebViews are excluded: they lack Safari's user-agent token but also
+  // lack support for a[download], so they fall through to Mechanism 3.
+  // ---------------------------------------------------------------------------
   // Use download attribute first if possible (#193 Lumia mobile) unless this is a macOS WebView
   : ('download' in HTMLAnchorElement.prototype && !isMacOSWebView)
   ? function saveAs (blob, name, opts) {
@@ -107,6 +132,13 @@ var saveAs = _global.saveAs || (
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Mechanism 2 — msSaveOrOpenBlob (Internet Explorer 10+)
+  //
+  // IE exposes a proprietary API that hands the Blob directly to the browser's
+  // native Save/Open dialog.  For string URLs the same CORS check as Mechanism
+  // 1 is applied.
+  // ---------------------------------------------------------------------------
   // Use msSaveOrOpenBlob as a second approach
   : 'msSaveOrOpenBlob' in navigator
   ? function saveAs (blob, name, opts) {
@@ -126,6 +158,18 @@ var saveAs = _global.saveAs || (
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Mechanism 3 — FileReader + popup (Legacy / iOS / macOS WebView fallback)
+  //
+  // Used when neither a[download] nor msSaveOrOpenBlob is available (older
+  // Safari, Chrome on iOS, macOS WebView with application/octet-stream blobs).
+  //
+  // A blank popup window is opened synchronously inside the user-interaction
+  // event so that popup blockers are not triggered.  The Blob is then read
+  // asynchronously via FileReader and the resulting data: URI is navigated to
+  // inside the already-open popup, which causes the browser to offer the file
+  // for saving or display it inline.
+  // ---------------------------------------------------------------------------
   // Fallback to using FileReader and a popup
   : function saveAs (blob, name, opts, popup) {
     // Open a popup immediately do go around popup blocker
